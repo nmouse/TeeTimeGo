@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,41 @@ func New() *Client { return &Client{apiBase: productionURL, loc: time.Local} }
 // Name implements provider.Provider.
 func (c *Client) Name() string { return "Chronogolf" }
 
+// get performs a GET request with retry on HTTP 429. It respects context cancellation.
+func (c *Client) get(ctx context.Context, rawURL string) (*http.Response, error) {
+	do := func() (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("Accept", "application/json")
+		return http.DefaultClient.Do(req)
+	}
+
+	resp, err := do()
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusTooManyRequests {
+		return resp, nil
+	}
+	resp.Body.Close()
+
+	delay := 3 * time.Second
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		if secs, e := strconv.Atoi(ra); e == nil && secs > 0 {
+			delay = time.Duration(secs) * time.Second
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(delay):
+	}
+	return do()
+}
+
 // SearchClubs returns all published Chronogolf clubs within radiusKm of lat/lng.
 // The API paginates at 25 results; we fetch all pages until an empty response.
 func (c *Client) SearchClubs(ctx context.Context, lat, lng, radiusKm float64) ([]Club, error) {
@@ -59,14 +95,7 @@ func (c *Client) SearchClubs(ctx context.Context, lat, lng, radiusKm float64) ([
 		params.Set("published", "true")
 		params.Set("page", fmt.Sprintf("%d", page))
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/marketplace/v2/search?"+params.Encode(), nil)
-		if err != nil {
-			return nil, fmt.Errorf("building chronogolf search request: %w", err)
-		}
-		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := c.get(ctx, c.apiBase+"/marketplace/v2/search?"+params.Encode())
 		if err != nil {
 			return nil, fmt.Errorf("chronogolf search request: %w", err)
 		}
@@ -136,14 +165,7 @@ func (c *Client) GetTeeTimes(ctx context.Context, slug string, date time.Time, p
 			params.Set("holes", fmt.Sprintf("%d", holes))
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/marketplace/v2/teetimes?"+params.Encode(), nil)
-		if err != nil {
-			return nil, fmt.Errorf("building chronogolf teetimes request: %w", err)
-		}
-		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := c.get(ctx, c.apiBase+"/marketplace/v2/teetimes?"+params.Encode())
 		if err != nil {
 			return nil, fmt.Errorf("chronogolf teetimes request: %w", err)
 		}
@@ -199,14 +221,7 @@ func (c *Client) GetTeeTimes(ctx context.Context, slug string, date time.Time, p
 }
 
 func (c *Client) courseUUIDs(ctx context.Context, slug string) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/marketplace/v2/clubs/"+slug, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building chronogolf club request: %w", err)
-	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.get(ctx, c.apiBase+"/marketplace/v2/clubs/"+slug)
 	if err != nil {
 		return nil, fmt.Errorf("chronogolf club request: %w", err)
 	}

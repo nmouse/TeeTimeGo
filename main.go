@@ -150,14 +150,15 @@ func fetchResults(ctx context.Context, ll geo.LatLng, radius float64, date time.
 	} else if len(cgClubs) > 0 {
 		fmt.Printf("Found %d course(s) on Chronogolf. Fetching tee times...\n\n", len(cgClubs))
 
+		cgSem := make(chan struct{}, 2) // Chronogolf rate-limits aggressively; keep concurrency low
 		var wg sync.WaitGroup
 		for _, club := range cgClubs {
 			wg.Add(1)
 			club := club
 			go func() {
 				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
+				cgSem <- struct{}{}
+				defer func() { <-cgSem }()
 
 				result := display.CourseResult{
 					CourseName:    club.Name,
