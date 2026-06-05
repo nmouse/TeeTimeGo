@@ -24,6 +24,7 @@ func main() {
 	holes := flag.Int("holes", 18, "Number of holes (9 or 18)")
 	fromStr := flag.String("from", "", "Earliest tee time to show in HH:MM (24h)")
 	toStr := flag.String("to", "", "Latest tee time to show in HH:MM (24h)")
+	web := flag.Bool("web", false, "Open results in browser instead of printing to terminal")
 	flag.Parse()
 
 	if *location == "" || *dateStr == "" {
@@ -160,7 +161,15 @@ func main() {
 		wg.Wait()
 	}
 
-	display.PrintTable(os.Stdout, deduplicate(filterByTime(results, fromMins, toMins)))
+	final := deduplicate(filterByTime(results, fromMins, toMins))
+	if *web {
+		if err := display.ServeWeb(final, *location, date); err != nil {
+			fmt.Fprintf(os.Stderr, "web server error: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		display.PrintTable(os.Stdout, final)
+	}
 }
 
 // deduplicate merges results with the same course name, preferring entries with tee times

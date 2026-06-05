@@ -1,0 +1,270 @@
+package display
+
+import (
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"net"
+	"net/http"
+	"os/exec"
+	"runtime"
+	"sort"
+	"time"
+)
+
+type teeTimeJSON struct {
+	Time    string  `json:"time"`
+	Minutes int     `json:"minutes"`
+	Players int     `json:"players"`
+	Holes   int     `json:"holes"`
+	Price   float64 `json:"price"`
+	BookURL string  `json:"bookURL"`
+}
+
+type courseJSON struct {
+	Name      string        `json:"name"`
+	DistMiles float64       `json:"distMiles"`
+	TeeTimes  []teeTimeJSON `json:"teeTimes"`
+	Status    string        `json:"status"`
+}
+
+// ServeWeb starts a local HTTP server and opens the browser to display results.
+// It blocks until the process is interrupted.
+func ServeWeb(results []CourseResult, location string, date time.Time) error {
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].DistMiles < results[j].DistMiles
+	})
+
+	courses := make([]courseJSON, 0, len(results))
+	for _, r := range results {
+		sort.Slice(r.TeeTimes, func(i, j int) bool {
+			return r.TeeTimes[i].Time.Before(r.TeeTimes[j].Time)
+		})
+
+		cj := courseJSON{Name: r.CourseName, DistMiles: r.DistMiles}
+		if len(r.TeeTimes) == 0 {
+			if r.Error != "" {
+				cj.Status = r.Error
+			} else if r.ProviderFound {
+				cj.Status = "no times available"
+			} else {
+				cj.Status = "no online booking found"
+			}
+		}
+		for _, tt := range r.TeeTimes {
+			cj.TeeTimes = append(cj.TeeTimes, teeTimeJSON{
+				Time:    tt.Time.Format(time.Kitchen),
+				Minutes: tt.Time.Hour()*60 + tt.Time.Minute(),
+				Players: tt.Players,
+				Holes:   tt.Holes,
+				Price:   tt.Price,
+				BookURL: tt.BookURL,
+			})
+		}
+		courses = append(courses, cj)
+	}
+
+	// Pre-format prices in JS; strip the redundant field — keep raw float only.
+	jsonBytes, err := json.Marshal(courses)
+	if err != nil {
+		return fmt.Errorf("serializing results: %w", err)
+	}
+
+	type pageData struct {
+		Data     template.JS
+		Location string
+		Date     string
+	}
+	data := pageData{
+		Data:     template.JS(jsonBytes),
+		Location: location,
+		Date:     date.Format("January 2, 2006"),
+	}
+
+	tmpl, err := template.New("").Parse(webTemplate)
+	if err != nil {
+		return fmt.Errorf("parsing template: %w", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		tmpl.Execute(w, data)
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("starting server: %w", err)
+	}
+	addr := fmt.Sprintf("http://localhost:%d", ln.Addr().(*net.TCPAddr).Port)
+	fmt.Printf("Serving results at %s  (Ctrl+C to exit)\n", addr)
+	go openBrowser(addr)
+
+	return http.Serve(ln, mux)
+}
+
+func openBrowser(url string) {
+	var cmd string
+	args := []string{url}
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = "open"
+	case "windows":
+		cmd = "cmd"
+		args = append([]string{"/c", "start"}, args...)
+	default:
+		cmd = "xdg-open"
+	}
+	exec.Command(cmd, args...).Start()
+}
+
+const webTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tee Times — {{.Location}}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f4;color:#1a1a1a;font-size:14px}
+header{background:#1a5c2a;color:#fff;padding:16px 24px}
+header h1{font-size:1.1rem;font-weight:600;letter-spacing:.01em}
+header p{font-size:.82rem;opacity:.75;margin-top:3px}
+.bar{background:#fff;border-bottom:1px solid #e2e8e2;padding:10px 24px;display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+.bar label{display:flex;align-items:center;gap:6px;font-size:.82rem;color:#444;white-space:nowrap}
+.bar input[type=time],.bar select{border:1px solid #ccc;border-radius:4px;padding:4px 7px;font-size:.82rem;background:#fff;color:#1a1a1a}
+.bar input[type=checkbox]{accent-color:#1a5c2a}
+.wrap{padding:20px 24px}
+.summary{font-size:.82rem;color:#666;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+thead th{background:#f0f4f0;padding:9px 14px;text-align:left;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#555;white-space:nowrap;cursor:pointer;user-select:none}
+thead th:hover{background:#e4ece4}
+thead th.asc::after{content:" ↑"}
+thead th.desc::after{content:" ↓"}
+td{padding:9px 14px;border-top:1px solid #f0f0f0;vertical-align:middle}
+tr.course-row td:first-child{font-weight:600;color:#1a5c2a}
+tr.course-row td{background:#fafbfa;border-top:2px solid #e2e8e2}
+tr.no-time td{color:#999;font-style:italic}
+tr.hidden{display:none}
+.dist{color:#888;font-size:.8rem}
+.price{font-weight:500}
+a.book{display:inline-block;padding:3px 10px;background:#1a5c2a;color:#fff;border-radius:4px;text-decoration:none;font-size:.78rem;white-space:nowrap}
+a.book:hover{background:#236b35}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tee Times near {{.Location}}</h1>
+  <p>{{.Date}}</p>
+</header>
+<div class="bar">
+  <label>From <input type="time" id="f-from"></label>
+  <label>To <input type="time" id="f-to"></label>
+  <label>Min spots
+    <select id="f-spots">
+      <option value="1">Any</option>
+      <option value="2">2+</option>
+      <option value="3">3+</option>
+      <option value="4">4</option>
+    </select>
+  </label>
+  <label>Sort
+    <select id="f-sort">
+      <option value="dist">Distance</option>
+      <option value="time">Earliest time</option>
+      <option value="price">Lowest price</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="f-hide"> Hide unavailable</label>
+</div>
+<div class="wrap">
+  <p class="summary" id="summary"></p>
+  <table>
+    <thead>
+      <tr>
+        <th data-col="name">Course</th>
+        <th data-col="dist">Dist</th>
+        <th data-col="time">Time</th>
+        <th data-col="spots">Spots</th>
+        <th data-col="holes">Holes</th>
+        <th data-col="price">Price</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+<script>
+const raw = {{.Data}};
+
+function toMins(val){ if(!val)return -1; const[h,m]=val.split(':').map(Number); return h*60+m; }
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmt(p){ return p>0?'$'+p.toFixed(2):'--'; }
+
+function render(){
+  const fromM = toMins(document.getElementById('f-from').value);
+  const toM   = toMins(document.getElementById('f-to').value);
+  const spots = parseInt(document.getElementById('f-spots').value)||1;
+  const sortBy= document.getElementById('f-sort').value;
+  const hide  = document.getElementById('f-hide').checked;
+
+  const courses = raw.map(c=>({
+    ...c,
+    vis: (c.teeTimes||[]).filter(t=>
+      (fromM<0||t.minutes>=fromM)&&
+      (toM<0||t.minutes<=toM)&&
+      t.players>=spots
+    )
+  }));
+
+  courses.sort((a,b)=>{
+    if(sortBy==='dist') return a.distMiles-b.distMiles;
+    if(sortBy==='time'){
+      const am=a.vis.length?a.vis[0].minutes:1e9, bm=b.vis.length?b.vis[0].minutes:1e9;
+      return am!==bm?am-bm:a.distMiles-b.distMiles;
+    }
+    if(sortBy==='price'){
+      const ap=a.vis.length?Math.min(...a.vis.map(t=>t.price)):1e9, bp=b.vis.length?Math.min(...b.vis.map(t=>t.price)):1e9;
+      return ap!==bp?ap-bp:a.distMiles-b.distMiles;
+    }
+  });
+
+  let totalTimes=0, coursesWithTimes=0;
+  const rows=[];
+
+  courses.forEach(c=>{
+    if(c.vis.length){
+      coursesWithTimes++; totalTimes+=c.vis.length;
+      c.vis.forEach((t,i)=>{
+        rows.push('<tr class="'+(i===0?'course-row':'')+'">'+
+          '<td>'+(i===0?esc(c.name):'')+'</td>'+
+          '<td class="dist">'+(i===0?c.distMiles.toFixed(1)+'mi':'')+'</td>'+
+          '<td>'+esc(t.time)+'</td>'+
+          '<td>'+t.players+'</td>'+
+          '<td>'+t.holes+'</td>'+
+          '<td class="price">'+fmt(t.price)+'</td>'+
+          '<td>'+(t.bookURL?'<a class="book" href="'+esc(t.bookURL)+'" target="_blank">Book →</a>':'')+'</td>'+
+          '</tr>');
+      });
+    } else if(!hide){
+      rows.push('<tr class="no-time course-row">'+
+        '<td>'+esc(c.name)+'</td>'+
+        '<td class="dist">'+c.distMiles.toFixed(1)+'mi</td>'+
+        '<td colspan="5">'+esc(c.status||'')+'</td>'+
+        '</tr>');
+    }
+  });
+
+  document.getElementById('tbody').innerHTML=rows.join('');
+  document.getElementById('summary').textContent=
+    coursesWithTimes+' course'+(coursesWithTimes!==1?'s':'')+' with times · '+totalTimes+' tee time'+(totalTimes!==1?'s':'');
+}
+
+['f-from','f-to','f-spots','f-sort','f-hide'].forEach(id=>
+  document.getElementById(id).addEventListener('change',render));
+document.getElementById('f-from').addEventListener('input',render);
+document.getElementById('f-to').addEventListener('input',render);
+render();
+</script>
+</body>
+</html>`
