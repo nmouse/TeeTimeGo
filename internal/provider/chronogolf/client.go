@@ -38,32 +38,9 @@ func New() *Client { return &Client{apiBase: productionURL, loc: time.Local} }
 func (c *Client) Name() string { return "Chronogolf" }
 
 // SearchClubs returns all published Chronogolf clubs within radiusKm of lat/lng.
+// The API paginates at 25 results; we fetch all pages until an empty response.
 func (c *Client) SearchClubs(ctx context.Context, lat, lng, radiusKm float64) ([]Club, error) {
-	params := url.Values{}
-	params.Set("location[lat]", fmt.Sprintf("%f", lat))
-	params.Set("location[lon]", fmt.Sprintf("%f", lng))
-	params.Set("location[distance]", fmt.Sprintf("%.0f", radiusKm))
-	params.Set("published", "true")
-	params.Set("page", "1")
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/marketplace/v2/search?"+params.Encode(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("building chronogolf search request: %w", err)
-	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("chronogolf search request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("chronogolf search returned status %d", resp.StatusCode)
-	}
-
-	var raw []struct {
+	type rawClub struct {
 		UUID     string `json:"uuid"`
 		Name     string `json:"name"`
 		Slug     string `json:"slug"`
@@ -72,19 +49,52 @@ func (c *Client) SearchClubs(ctx context.Context, lat, lng, radiusKm float64) ([
 			Lon float64 `json:"lon"`
 		} `json:"location"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("decoding chronogolf search response: %w", err)
-	}
 
-	clubs := make([]Club, 0, len(raw))
-	for _, r := range raw {
-		clubs = append(clubs, Club{
-			UUID: r.UUID,
-			Name: r.Name,
-			Slug: r.Slug,
-			Lat:  r.Location.Lat,
-			Lng:  r.Location.Lon,
-		})
+	var clubs []Club
+	for page := 1; page <= 20; page++ {
+		params := url.Values{}
+		params.Set("location[lat]", fmt.Sprintf("%f", lat))
+		params.Set("location[lon]", fmt.Sprintf("%f", lng))
+		params.Set("location[distance]", fmt.Sprintf("%.0f", radiusKm))
+		params.Set("published", "true")
+		params.Set("page", fmt.Sprintf("%d", page))
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/marketplace/v2/search?"+params.Encode(), nil)
+		if err != nil {
+			return nil, fmt.Errorf("building chronogolf search request: %w", err)
+		}
+		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("chronogolf search request: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("chronogolf search returned status %d", resp.StatusCode)
+		}
+
+		var raw []rawClub
+		decodeErr := json.NewDecoder(resp.Body).Decode(&raw)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decoding chronogolf search response: %w", decodeErr)
+		}
+		if len(raw) == 0 {
+			break
+		}
+
+		for _, r := range raw {
+			clubs = append(clubs, Club{
+				UUID: r.UUID,
+				Name: r.Name,
+				Slug: r.Slug,
+				Lat:  r.Location.Lat,
+				Lng:  r.Location.Lon,
+			})
+		}
 	}
 	return clubs, nil
 }

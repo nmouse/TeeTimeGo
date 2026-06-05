@@ -51,6 +51,64 @@ func stubServer(t *testing.T, pages map[int][]string) *httptest.Server {
 	}))
 }
 
+// searchStubServer returns a test server for SearchClubs pagination tests.
+// clubPages maps page number to a slice of club slugs to return on that page.
+func searchStubServer(t *testing.T, clubPages map[int][]string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/marketplace/v2/search" {
+			http.NotFound(w, r)
+			return
+		}
+		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+		if page == 0 {
+			page = 1
+		}
+		var clubs []map[string]any
+		for _, slug := range clubPages[page] {
+			clubs = append(clubs, map[string]any{
+				"uuid": slug + "-uuid",
+				"name": slug,
+				"slug": slug,
+				"location": map[string]any{"lat": 40.76, "lon": -111.89},
+			})
+		}
+		json.NewEncoder(w).Encode(clubs)
+	}))
+}
+
+func TestSearchClubs_PaginatesAllPages(t *testing.T) {
+	page1 := []string{"course-a", "course-b", "course-c"}
+	page2 := []string{"course-d", "course-e"}
+	ts := searchStubServer(t, map[int][]string{1: page1, 2: page2})
+	defer ts.Close()
+
+	c := testClient(ts, time.UTC)
+	got, err := c.SearchClubs(context.Background(), 40.76, -111.89, 80)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := len(page1) + len(page2)
+	if len(got) != want {
+		t.Errorf("got %d clubs, want %d (pages 1+2 combined)", len(got), want)
+	}
+}
+
+func TestSearchClubs_StopsOnEmptyFirstPage(t *testing.T) {
+	ts := searchStubServer(t, map[int][]string{})
+	defer ts.Close()
+
+	c := testClient(ts, time.UTC)
+	got, err := c.SearchClubs(context.Background(), 40.76, -111.89, 80)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d clubs, want 0", len(got))
+	}
+}
+
 func TestGetTeeTimes_PaginatesAllPages(t *testing.T) {
 	// Page 1 and 2 each have times; page 3 is empty → loop must stop.
 	page1 := []string{
