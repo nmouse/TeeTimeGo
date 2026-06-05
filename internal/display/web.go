@@ -28,19 +28,15 @@ type courseJSON struct {
 	Status    string        `json:"status"`
 }
 
-// ServeWeb starts a local HTTP server and opens the browser to display results.
-// It blocks until the process is interrupted.
-func ServeWeb(results []CourseResult, location string, date time.Time) error {
+func buildCourseJSON(results []CourseResult) []courseJSON {
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].DistMiles < results[j].DistMiles
 	})
-
 	courses := make([]courseJSON, 0, len(results))
 	for _, r := range results {
 		sort.Slice(r.TeeTimes, func(i, j int) bool {
 			return r.TeeTimes[i].Time.Before(r.TeeTimes[j].Time)
 		})
-
 		cj := courseJSON{Name: r.CourseName, DistMiles: r.DistMiles}
 		if len(r.TeeTimes) == 0 {
 			if r.Error != "" {
@@ -63,33 +59,63 @@ func ServeWeb(results []CourseResult, location string, date time.Time) error {
 		}
 		courses = append(courses, cj)
 	}
+	return courses
+}
 
-	// Pre-format prices in JS; strip the redundant field — keep raw float only.
-	jsonBytes, err := json.Marshal(courses)
+// ServeWeb starts a local HTTP server and opens the browser to display results.
+// fetchFn is called when the user changes the date in the UI; it receives the new
+// date and should return deduplicated, filtered results for that date.
+// Blocks until the process is interrupted.
+func ServeWeb(results []CourseResult, location string, date time.Time, fetchFn func(time.Time) ([]CourseResult, error)) error {
+	tmpl, err := template.New("").Parse(webTemplate)
 	if err != nil {
-		return fmt.Errorf("serializing results: %w", err)
+		return fmt.Errorf("parsing template: %w", err)
 	}
 
 	type pageData struct {
 		Data     template.JS
 		Location string
 		Date     string
-	}
-	data := pageData{
-		Data:     template.JS(jsonBytes),
-		Location: location,
-		Date:     date.Format("January 2, 2006"),
+		DateISO  string
 	}
 
-	tmpl, err := template.New("").Parse(webTemplate)
+	buildPage := func(r []CourseResult, d time.Time) (pageData, error) {
+		b, err := json.Marshal(buildCourseJSON(r))
+		if err != nil {
+			return pageData{}, fmt.Errorf("serializing results: %w", err)
+		}
+		return pageData{
+			Data:     template.JS(b),
+			Location: location,
+			Date:     d.Format("January 2, 2006"),
+			DateISO:  d.Format("2006-01-02"),
+		}, nil
+	}
+
+	initial, err := buildPage(results, date)
 	if err != nil {
-		return fmt.Errorf("parsing template: %w", err)
+		return err
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.Execute(w, data)
+		tmpl.Execute(w, initial)
+	})
+	mux.HandleFunc("/teetimes", func(w http.ResponseWriter, r *http.Request) {
+		dateStr := r.URL.Query().Get("date")
+		d, err := time.Parse("2006-01-02", dateStr)
+		if err != nil {
+			http.Error(w, "invalid date: must be YYYY-MM-DD", http.StatusBadRequest)
+			return
+		}
+		newResults, err := fetchFn(d)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(buildCourseJSON(newResults))
 	})
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -132,7 +158,7 @@ header h1{font-size:1.1rem;font-weight:600;letter-spacing:.01em}
 header p{font-size:.82rem;opacity:.75;margin-top:3px}
 .bar{background:#fff;border-bottom:1px solid #e2e8e2;padding:10px 24px;display:flex;gap:20px;align-items:center;flex-wrap:wrap}
 .bar label{display:flex;align-items:center;gap:6px;font-size:.82rem;color:#444;white-space:nowrap}
-.bar input[type=time],.bar select{border:1px solid #ccc;border-radius:4px;padding:4px 7px;font-size:.82rem;background:#fff;color:#1a1a1a}
+.bar input[type=time],.bar input[type=date],.bar select{border:1px solid #ccc;border-radius:4px;padding:4px 7px;font-size:.82rem;background:#fff;color:#1a1a1a}
 .bar input[type=checkbox]{accent-color:#1a5c2a}
 .wrap{padding:20px 24px}
 .summary{font-size:.82rem;color:#666;margin-bottom:10px}
@@ -145,7 +171,8 @@ td{padding:9px 14px;border-top:1px solid #f0f0f0;vertical-align:middle}
 tr.course-row td:first-child{font-weight:600;color:#1a5c2a}
 tr.course-row td{background:#fafbfa;border-top:2px solid #e2e8e2}
 tr.no-time td{color:#999;font-style:italic}
-tr.hidden{display:none}
+tr.loading td{text-align:center;padding:24px;color:#888;font-style:italic}
+tr.error td{text-align:center;padding:24px;color:#c00}
 .dist{color:#888;font-size:.8rem}
 .price{font-weight:500}
 a.book{display:inline-block;padding:3px 10px;background:#1a5c2a;color:#fff;border-radius:4px;text-decoration:none;font-size:.78rem;white-space:nowrap}
@@ -155,9 +182,10 @@ a.book:hover{background:#236b35}
 <body>
 <header>
   <h1>Tee Times near {{.Location}}</h1>
-  <p>{{.Date}}</p>
+  <p id="header-date">{{.Date}}</p>
 </header>
 <div class="bar">
+  <label>Date <input type="date" id="f-date" value="{{.DateISO}}"></label>
   <label>From <input type="time" id="f-from"></label>
   <label>To <input type="time" id="f-to"></label>
   <label>Min spots
@@ -195,10 +223,10 @@ a.book:hover{background:#236b35}
   </table>
 </div>
 <script>
-const raw = {{.Data}};
+let raw = {{.Data}};
 
 function toMins(val){ if(!val)return -1; const[h,m]=val.split(':').map(Number); return h*60+m; }
-function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function fmt(p){ return p>0?'$'+p.toFixed(2):'--'; }
 
 function render(){
@@ -259,6 +287,28 @@ function render(){
   document.getElementById('summary').textContent=
     coursesWithTimes+' course'+(coursesWithTimes!==1?'s':'')+' with times · '+totalTimes+' tee time'+(totalTimes!==1?'s':'');
 }
+
+document.getElementById('f-date').addEventListener('change', async function() {
+  const d = this.value;
+  if (!d) return;
+  document.getElementById('tbody').innerHTML =
+    '<tr class="loading"><td colspan="7">Fetching tee times… (may take ~10 seconds)</td></tr>';
+  document.getElementById('summary').textContent = 'Loading…';
+  try {
+    const resp = await fetch('/teetimes?date=' + encodeURIComponent(d));
+    if (!resp.ok) throw new Error(await resp.text());
+    raw = await resp.json();
+    // update header date display
+    const dt = new Date(d + 'T12:00:00');
+    document.getElementById('header-date').textContent =
+      dt.toLocaleDateString('en-US', {year:'numeric', month:'long', day:'numeric'});
+    render();
+  } catch(e) {
+    document.getElementById('tbody').innerHTML =
+      '<tr class="error"><td colspan="7">'+esc(e)+'</td></tr>';
+    document.getElementById('summary').textContent = 'Error loading results';
+  }
+});
 
 ['f-from','f-to','f-spots','f-sort','f-hide'].forEach(id=>
   document.getElementById(id).addEventListener('change',render));

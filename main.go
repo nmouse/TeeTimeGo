@@ -28,7 +28,7 @@ func main() {
 	flag.Parse()
 
 	if *location == "" || *dateStr == "" {
-		fmt.Fprintln(os.Stderr, "usage: teetime --location <location> --date <YYYY-MM-DD> [--radius <miles>] [--players <n>] [--holes <9|18>] [--from HH:MM] [--to HH:MM]")
+		fmt.Fprintln(os.Stderr, "usage: teetime --location <location> --date <YYYY-MM-DD> [--radius <miles>] [--players <n>] [--holes <9|18>] [--from HH:MM] [--to HH:MM] [--web]")
 		os.Exit(1)
 	}
 
@@ -60,14 +60,30 @@ func main() {
 	}
 	fmt.Printf("Location resolved: %.4f, %.4f\n", ll.Lat, ll.Lng)
 
-	// Semaphore: cap concurrency at 10 across both pipelines.
+	results := fetchResults(ctx, ll, *radius, date, *players, *holes)
+	final := deduplicate(filterByTime(results, fromMins, toMins))
+
+	if *web {
+		fetchFn := func(d time.Time) ([]display.CourseResult, error) {
+			r := fetchResults(ctx, ll, *radius, d, *players, *holes)
+			return deduplicate(filterByTime(r, fromMins, toMins)), nil
+		}
+		if err := display.ServeWeb(final, *location, date, fetchFn); err != nil {
+			fmt.Fprintf(os.Stderr, "web server error: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		display.PrintTable(os.Stdout, final)
+	}
+}
+
+func fetchResults(ctx context.Context, ll geo.LatLng, radius float64, date time.Time, players, holes int) []display.CourseResult {
 	sem := make(chan struct{}, 10)
 	var mu sync.Mutex
 	var results []display.CourseResult
 
-	// --- Pipeline 1: Overpass + ForeUP ---
-
-	courses, err := geo.FindCourses(ctx, ll, *radius)
+	// Pipeline 1: Overpass + ForeUP
+	courses, err := geo.FindCourses(ctx, ll, radius)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "course discovery error: %v\n", err)
 	} else if len(courses) > 0 {
@@ -102,7 +118,7 @@ func main() {
 
 				if scheduleID != "" {
 					result.ProviderFound = true
-					times, err := foreupClient.GetTeeTimes(cctx, scheduleID, date, *players, *holes)
+					times, err := foreupClient.GetTeeTimes(cctx, scheduleID, date, players, holes)
 					if err != nil {
 						result.Error = fmt.Sprintf("API error: %v", err)
 					} else {
@@ -118,10 +134,9 @@ func main() {
 		wg.Wait()
 	}
 
-	// --- Pipeline 2: Chronogolf ---
-
+	// Pipeline 2: Chronogolf
 	cgClient := chronogolf.New()
-	radiusKm := *radius * 1.609344
+	radiusKm := radius * 1.609344
 	cgClubs, err := cgClient.SearchClubs(ctx, ll.Lat, ll.Lng, radiusKm)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "chronogolf search error: %v\n", err)
@@ -146,7 +161,7 @@ func main() {
 				cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 				defer cancel()
 
-				times, err := cgClient.GetTeeTimes(cctx, club.Slug, date, *players, *holes)
+				times, err := cgClient.GetTeeTimes(cctx, club.Slug, date, players, holes)
 				if err != nil {
 					result.Error = fmt.Sprintf("API error: %v", err)
 				} else {
@@ -161,15 +176,7 @@ func main() {
 		wg.Wait()
 	}
 
-	final := deduplicate(filterByTime(results, fromMins, toMins))
-	if *web {
-		if err := display.ServeWeb(final, *location, date); err != nil {
-			fmt.Fprintf(os.Stderr, "web server error: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		display.PrintTable(os.Stdout, final)
-	}
+	return results
 }
 
 // deduplicate merges results with the same course name, preferring entries with tee times
