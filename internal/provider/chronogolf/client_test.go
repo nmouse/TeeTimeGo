@@ -68,10 +68,11 @@ func searchStubServer(t *testing.T, clubPages map[int][]string) *httptest.Server
 		var clubs []map[string]any
 		for _, slug := range clubPages[page] {
 			clubs = append(clubs, map[string]any{
-				"uuid": slug + "-uuid",
-				"name": slug,
-				"slug": slug,
-				"location": map[string]any{"lat": 40.76, "lon": -111.89},
+				"uuid":                   slug + "-uuid",
+				"name":                   slug,
+				"slug":                   slug,
+				"online_booking_enabled": true,
+				"location":               map[string]any{"lat": 40.76, "lon": -111.89},
 			})
 		}
 		json.NewEncoder(w).Encode(clubs)

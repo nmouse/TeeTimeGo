@@ -77,10 +77,11 @@ func (c *Client) get(ctx context.Context, rawURL string) (*http.Response, error)
 // The API paginates at 25 results; we fetch all pages until an empty response.
 func (c *Client) SearchClubs(ctx context.Context, lat, lng, radiusKm float64) ([]Club, error) {
 	type rawClub struct {
-		UUID     string `json:"uuid"`
-		Name     string `json:"name"`
-		Slug     string `json:"slug"`
-		Location struct {
+		UUID                 string `json:"uuid"`
+		Name                 string `json:"name"`
+		Slug                 string `json:"slug"`
+		OnlineBookingEnabled bool   `json:"online_booking_enabled"`
+		Location             struct {
 			Lat float64 `json:"lat"`
 			Lon float64 `json:"lon"`
 		} `json:"location"`
@@ -116,6 +117,9 @@ func (c *Client) SearchClubs(ctx context.Context, lat, lng, radiusKm float64) ([
 		}
 
 		for _, r := range raw {
+			if !r.OnlineBookingEnabled {
+				continue
+			}
 			clubs = append(clubs, Club{
 				UUID: r.UUID,
 				Name: r.Name,

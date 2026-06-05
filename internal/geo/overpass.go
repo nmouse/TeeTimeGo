@@ -73,6 +73,18 @@ func FindCourses(ctx context.Context, origin LatLng, radiusMiles float64) ([]Cou
 		if name == "" || seen[name] {
 			continue
 		}
+
+		// Skip disc golf courses.
+		if el.Tags["sport"] == "disc_golf" || strings.Contains(strings.ToLower(name), "disc golf") {
+			continue
+		}
+
+		// Skip private / members-only courses.
+		switch el.Tags["access"] {
+		case "private", "members", "no":
+			continue
+		}
+
 		seen[name] = true
 
 		website := el.Tags["website"]
