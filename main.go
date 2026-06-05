@@ -22,10 +22,12 @@ func main() {
 	radius := flag.Float64("radius", 25, "Search radius in miles")
 	players := flag.Int("players", 1, "Number of players")
 	holes := flag.Int("holes", 18, "Number of holes (9 or 18)")
+	fromStr := flag.String("from", "", "Earliest tee time to show in HH:MM (24h)")
+	toStr := flag.String("to", "", "Latest tee time to show in HH:MM (24h)")
 	flag.Parse()
 
 	if *location == "" || *dateStr == "" {
-		fmt.Fprintln(os.Stderr, "usage: teetime --location <location> --date <YYYY-MM-DD> [--radius <miles>] [--players <n>] [--holes <9|18>]")
+		fmt.Fprintln(os.Stderr, "usage: teetime --location <location> --date <YYYY-MM-DD> [--radius <miles>] [--players <n>] [--holes <9|18>] [--from HH:MM] [--to HH:MM]")
 		os.Exit(1)
 	}
 
@@ -36,6 +38,12 @@ func main() {
 	}
 	if *holes != 9 && *holes != 18 {
 		fmt.Fprintln(os.Stderr, "--holes must be 9 or 18")
+		os.Exit(1)
+	}
+
+	fromMins, toMins, err := parseTimeRange(*fromStr, *toStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 
@@ -152,7 +160,7 @@ func main() {
 		wg.Wait()
 	}
 
-	display.PrintTable(os.Stdout, deduplicate(results))
+	display.PrintTable(os.Stdout, deduplicate(filterByTime(results, fromMins, toMins)))
 }
 
 // deduplicate merges results with the same course name, preferring entries with tee times
@@ -181,4 +189,51 @@ func resultScore(r display.CourseResult) int {
 		return 1
 	}
 	return 0
+}
+
+// parseTimeRange parses --from and --to flag values into minutes-from-midnight.
+// Returns -1 for an unset bound. Returns an error if either value is malformed.
+func parseTimeRange(from, to string) (fromMins, toMins int, err error) {
+	fromMins, toMins = -1, -1
+	parse := func(s, flag string) (int, error) {
+		t, err := time.Parse("15:04", s)
+		if err != nil {
+			return 0, fmt.Errorf("invalid --%s %q: must be HH:MM (e.g. 08:00)", flag, s)
+		}
+		return t.Hour()*60 + t.Minute(), nil
+	}
+	if from != "" {
+		if fromMins, err = parse(from, "from"); err != nil {
+			return
+		}
+	}
+	if to != "" {
+		if toMins, err = parse(to, "to"); err != nil {
+			return
+		}
+	}
+	return
+}
+
+// filterByTime removes tee times outside [fromMins, toMins] (minutes-from-midnight).
+// A bound of -1 means no limit on that side.
+func filterByTime(results []display.CourseResult, fromMins, toMins int) []display.CourseResult {
+	if fromMins == -1 && toMins == -1 {
+		return results
+	}
+	for i := range results {
+		filtered := results[i].TeeTimes[:0]
+		for _, tt := range results[i].TeeTimes {
+			m := tt.Time.Hour()*60 + tt.Time.Minute()
+			if fromMins != -1 && m < fromMins {
+				continue
+			}
+			if toMins != -1 && m > toMins {
+				continue
+			}
+			filtered = append(filtered, tt)
+		}
+		results[i].TeeTimes = filtered
+	}
+	return results
 }
