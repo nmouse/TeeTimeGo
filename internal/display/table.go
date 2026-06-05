@@ -11,11 +11,11 @@ import (
 )
 
 type CourseResult struct {
-	CourseName  string
-	DistMiles   float64
-	TeeTimes    []provider.TeeTime
-	ForeUPFound bool   // true when a schedule ID was detected, even if no times returned
-	Error       string // non-empty when scrape or fetch failed
+	CourseName    string
+	DistMiles     float64
+	TeeTimes      []provider.TeeTime
+	ProviderFound bool   // true when a booking provider was detected, even if no times returned
+	Error         string // non-empty when scrape or fetch failed
 }
 
 func PrintTable(w io.Writer, results []CourseResult) {
@@ -30,10 +30,10 @@ func PrintTable(w io.Writer, results []CourseResult) {
 	for _, r := range results {
 		dist := fmt.Sprintf("%.1fmi", r.DistMiles)
 		if len(r.TeeTimes) == 0 {
-			status := "no ForeUP booking found"
+			status := "no online booking found"
 			if r.Error != "" {
 				status = r.Error
-			} else if r.ForeUPFound {
+			} else if r.ProviderFound {
 				status = "no times available"
 			}
 			fmt.Fprintf(tw, "%s\t%s\t--\t--\t--\t%s\t\n", r.CourseName, dist, status)

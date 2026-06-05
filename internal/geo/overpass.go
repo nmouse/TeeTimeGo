@@ -88,13 +88,14 @@ func FindCourses(ctx context.Context, origin LatLng, radiusMiles float64) ([]Cou
 			Lat:       lat,
 			Lng:       lng,
 			Website:   website,
-			DistMiles: haversineMiles(origin.Lat, origin.Lng, lat, lng),
+			DistMiles: HaversineMiles(origin.Lat, origin.Lng, lat, lng),
 		})
 	}
 	return courses, nil
 }
 
-func haversineMiles(lat1, lng1, lat2, lng2 float64) float64 {
+// HaversineMiles returns the great-circle distance in miles between two lat/lng points.
+func HaversineMiles(lat1, lng1, lat2, lng2 float64) float64 {
 	const R = 3958.8 // Earth radius in miles
 	dLat := (lat2 - lat1) * math.Pi / 180
 	dLng := (lng2 - lng1) * math.Pi / 180
