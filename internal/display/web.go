@@ -182,12 +182,18 @@ thead th:hover{background:#e4ece4}
 thead th.asc::after{content:" ↑"}
 thead th.desc::after{content:" ↓"}
 td{padding:9px 14px;border-top:1px solid #f0f0f0;vertical-align:middle}
-tr.course-row td:first-child{font-weight:600;color:#1a5c2a}
 tr.course-row td{background:#fafbfa;border-top:2px solid #e2e8e2}
+tr.course-row.has-times{cursor:pointer}
+tr.course-row.has-times:hover td{background:#edf2ed}
+tr.course-row td:first-child{font-weight:600;color:#1a5c2a}
+tr.teetime-row td{border-top:1px solid #f0f0f0}
 tr.no-time td{color:#999;font-style:italic}
 tr.loading td{text-align:center;padding:24px;color:#888;font-style:italic}
 tr.error td{text-align:center;padding:24px;color:#c00}
+.arrow{display:inline-block;width:1.1em;font-size:.7rem;color:#888;transition:transform .1s}
 .dist{color:#888;font-size:.8rem}
+.count{color:#555;font-size:.82rem}
+.range{color:#555}
 .price{font-weight:500}
 a.book{display:inline-block;padding:3px 10px;background:#1a5c2a;color:#fff;border-radius:4px;text-decoration:none;font-size:.78rem;white-space:nowrap}
 a.book:hover{background:#236b35}
@@ -238,6 +244,12 @@ a.book:hover{background:#236b35}
 </div>
 <script>
 let raw = {{.Data}};
+const expanded = new Set();
+
+function toggleCourse(name) {
+  if (expanded.has(name)) expanded.delete(name); else expanded.add(name);
+  render();
+}
 
 function toMins(val){ if(!val)return -1; const[h,m]=val.split(':').map(Number); return h*60+m; }
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -277,17 +289,41 @@ function render(){
   courses.forEach(c=>{
     if(c.vis.length){
       coursesWithTimes++; totalTimes+=c.vis.length;
-      c.vis.forEach((t,i)=>{
-        rows.push('<tr class="'+(i===0?'course-row':'')+'">'+
-          '<td>'+(i===0?esc(c.name):'')+'</td>'+
-          '<td class="dist">'+(i===0?c.distMiles.toFixed(1)+'mi':'')+'</td>'+
-          '<td>'+esc(t.time)+'</td>'+
-          '<td>'+t.players+'</td>'+
-          '<td>'+t.holes+'</td>'+
-          '<td class="price">'+fmt(t.price)+'</td>'+
-          '<td>'+(t.bookURL?'<a class="book" href="'+esc(t.bookURL)+'" target="_blank">Book →</a>':'')+'</td>'+
-          '</tr>');
-      });
+      const open = expanded.has(c.name);
+      const arrow = open ? '▼' : '▶';
+      const first = c.vis[0].time;
+      const last  = c.vis[c.vis.length-1].time;
+      const range = c.vis.length>1 ? first+' – '+last : first;
+      const minP  = Math.min(...c.vis.map(t=>t.price));
+      const cnt   = c.vis.length+' time'+(c.vis.length!==1?'s':'');
+
+      rows.push(
+        '<tr class="course-row has-times" onclick="toggleCourse('+JSON.stringify(c.name)+')">' +
+        '<td><span class="arrow">'+arrow+'</span> '+esc(c.name)+'</td>'+
+        '<td class="dist">'+c.distMiles.toFixed(1)+'mi</td>'+
+        '<td class="range">'+esc(range)+'</td>'+
+        '<td class="count">'+cnt+'</td>'+
+        '<td></td>'+
+        '<td class="price">'+(minP>0?'from '+fmt(minP):'--')+'</td>'+
+        '<td></td>'+
+        '</tr>'
+      );
+
+      if(open){
+        c.vis.forEach(t=>{
+          rows.push(
+            '<tr class="teetime-row">'+
+            '<td></td>'+
+            '<td></td>'+
+            '<td>'+esc(t.time)+'</td>'+
+            '<td>'+t.players+'</td>'+
+            '<td>'+t.holes+'</td>'+
+            '<td class="price">'+fmt(t.price)+'</td>'+
+            '<td>'+(t.bookURL?'<a class="book" href="'+esc(t.bookURL)+'" target="_blank">Book →</a>':'')+'</td>'+
+            '</tr>'
+          );
+        });
+      }
     } else if(!hide){
       rows.push('<tr class="no-time course-row">'+
         '<td>'+esc(c.name)+'</td>'+
