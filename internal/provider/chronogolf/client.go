@@ -86,6 +86,7 @@ func (c *Client) SearchClubs(ctx context.Context, lat, lng, radiusKm float64) ([
 }
 
 // GetTeeTimes implements provider.Provider. scheduleID is the club slug.
+// The API paginates at 24 results; we fetch all pages until an empty response.
 func (c *Client) GetTeeTimes(ctx context.Context, slug string, date time.Time, players, holes int) ([]provider.TeeTime, error) {
 	courseUUIDs, err := c.courseUUIDs(ctx, slug)
 	if err != nil {
@@ -95,76 +96,90 @@ func (c *Client) GetTeeTimes(ctx context.Context, slug string, date time.Time, p
 		return nil, nil
 	}
 
-	params := url.Values{}
-	params.Set("start_date", date.Format("2006-01-02"))
-	params.Set("free_slots", fmt.Sprintf("%d", players))
-	params.Set("course_ids", strings.Join(courseUUIDs, ","))
-	if holes == 9 || holes == 18 {
-		params.Set("holes", fmt.Sprintf("%d", holes))
-	}
+	localDate := date.Format("2006-01-02")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/marketplace/v2/teetimes?"+params.Encode(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("building chronogolf teetimes request: %w", err)
-	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("chronogolf teetimes request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("chronogolf teetimes returned status %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Status   string `json:"status"`
-		Teetimes []struct {
-			UUID       string `json:"uuid"`
-			StartsAt   string `json:"starts_at"`
-			MaxPlayers int    `json:"max_player_size"`
-			Course     struct {
-				Holes int `json:"holes"`
-			} `json:"course"`
-			DefaultPrice *struct {
-				GreenFee      float64 `json:"green_fee"`
-				Subtotal      float64 `json:"subtotal"`
-				BookableHoles int     `json:"bookable_holes"`
-			} `json:"default_price"`
-		} `json:"teetimes"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding chronogolf teetimes response: %w", err)
+	type rawTeetime struct {
+		StartsAt   string `json:"starts_at"`
+		MaxPlayers int    `json:"max_player_size"`
+		Course     struct {
+			Holes int `json:"holes"`
+		} `json:"course"`
+		DefaultPrice *struct {
+			GreenFee      float64 `json:"green_fee"`
+			Subtotal      float64 `json:"subtotal"`
+			BookableHoles int     `json:"bookable_holes"`
+		} `json:"default_price"`
 	}
 
 	var times []provider.TeeTime
-	for _, tt := range result.Teetimes {
-		t, err := time.Parse(time.RFC3339, tt.StartsAt)
+	for page := 1; page <= 20; page++ {
+		params := url.Values{}
+		params.Set("start_date", date.Format("2006-01-02"))
+		params.Set("free_slots", fmt.Sprintf("%d", players))
+		params.Set("course_ids", strings.Join(courseUUIDs, ","))
+		params.Set("page", fmt.Sprintf("%d", page))
+		if holes == 9 || holes == 18 {
+			params.Set("holes", fmt.Sprintf("%d", holes))
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/marketplace/v2/teetimes?"+params.Encode(), nil)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("building chronogolf teetimes request: %w", err)
 		}
-		t = t.In(time.Local)
-		var price float64
-		holesCount := tt.Course.Holes
-		if tt.DefaultPrice != nil {
-			price = tt.DefaultPrice.Subtotal
-			if price == 0 {
-				price = tt.DefaultPrice.GreenFee
-			}
-			if tt.DefaultPrice.BookableHoles > 0 {
-				holesCount = tt.DefaultPrice.BookableHoles
-			}
+		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("chronogolf teetimes request: %w", err)
 		}
-		times = append(times, provider.TeeTime{
-			Time:    t,
-			Players: tt.MaxPlayers,
-			Holes:   holesCount,
-			Price:   price,
-			BookURL: fmt.Sprintf("%s/club/%s", baseURL, slug),
-		})
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("chronogolf teetimes returned status %d", resp.StatusCode)
+		}
+
+		var result struct {
+			Teetimes []rawTeetime `json:"teetimes"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if decodeErr != nil {
+			return nil, fmt.Errorf("decoding chronogolf teetimes response: %w", decodeErr)
+		}
+		if len(result.Teetimes) == 0 {
+			break
+		}
+
+		for _, tt := range result.Teetimes {
+			t, err := time.Parse(time.RFC3339, tt.StartsAt)
+			if err != nil {
+				continue
+			}
+			t = t.In(time.Local)
+			// UTC timestamps can cross midnight; only keep times on the requested local date.
+			if t.Format("2006-01-02") != localDate {
+				continue
+			}
+			var price float64
+			holesCount := tt.Course.Holes
+			if tt.DefaultPrice != nil {
+				price = tt.DefaultPrice.Subtotal
+				if price == 0 {
+					price = tt.DefaultPrice.GreenFee
+				}
+				if tt.DefaultPrice.BookableHoles > 0 {
+					holesCount = tt.DefaultPrice.BookableHoles
+				}
+			}
+			times = append(times, provider.TeeTime{
+				Time:    t,
+				Players: tt.MaxPlayers,
+				Holes:   holesCount,
+				Price:   price,
+				BookURL: fmt.Sprintf("%s/club/%s", baseURL, slug),
+			})
+		}
 	}
 	return times, nil
 }
