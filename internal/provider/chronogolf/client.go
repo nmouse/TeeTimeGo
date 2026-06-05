@@ -12,7 +12,7 @@ import (
 	"github.com/owner/teetime/internal/provider"
 )
 
-const baseURL = "https://www.chronogolf.com"
+const productionURL = "https://www.chronogolf.com"
 
 const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
@@ -25,10 +25,14 @@ type Club struct {
 	Lng  float64
 }
 
-type Client struct{}
+// Client is a Chronogolf marketplace API client.
+type Client struct {
+	apiBase string         // overridden in tests
+	loc     *time.Location // timezone for local-date comparisons; defaults to time.Local
+}
 
 // New returns a new Chronogolf client.
-func New() *Client { return &Client{} }
+func New() *Client { return &Client{apiBase: productionURL, loc: time.Local} }
 
 // Name implements provider.Provider.
 func (c *Client) Name() string { return "Chronogolf" }
@@ -42,7 +46,7 @@ func (c *Client) SearchClubs(ctx context.Context, lat, lng, radiusKm float64) ([
 	params.Set("published", "true")
 	params.Set("page", "1")
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/marketplace/v2/search?"+params.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/marketplace/v2/search?"+params.Encode(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("building chronogolf search request: %w", err)
 	}
@@ -122,7 +126,7 @@ func (c *Client) GetTeeTimes(ctx context.Context, slug string, date time.Time, p
 			params.Set("holes", fmt.Sprintf("%d", holes))
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/marketplace/v2/teetimes?"+params.Encode(), nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/marketplace/v2/teetimes?"+params.Encode(), nil)
 		if err != nil {
 			return nil, fmt.Errorf("building chronogolf teetimes request: %w", err)
 		}
@@ -156,7 +160,7 @@ func (c *Client) GetTeeTimes(ctx context.Context, slug string, date time.Time, p
 			if err != nil {
 				continue
 			}
-			t = t.In(time.Local)
+			t = t.In(c.loc)
 			// UTC timestamps can cross midnight; only keep times on the requested local date.
 			if t.Format("2006-01-02") != localDate {
 				continue
@@ -177,7 +181,7 @@ func (c *Client) GetTeeTimes(ctx context.Context, slug string, date time.Time, p
 				Players: tt.MaxPlayers,
 				Holes:   holesCount,
 				Price:   price,
-				BookURL: fmt.Sprintf("%s/club/%s", baseURL, slug),
+				BookURL: fmt.Sprintf("%s/club/%s", productionURL, slug),
 			})
 		}
 	}
@@ -185,7 +189,7 @@ func (c *Client) GetTeeTimes(ctx context.Context, slug string, date time.Time, p
 }
 
 func (c *Client) courseUUIDs(ctx context.Context, slug string) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/marketplace/v2/clubs/"+slug, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBase+"/marketplace/v2/clubs/"+slug, nil)
 	if err != nil {
 		return nil, fmt.Errorf("building chronogolf club request: %w", err)
 	}
