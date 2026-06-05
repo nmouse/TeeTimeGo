@@ -60,15 +60,22 @@ func main() {
 	}
 	fmt.Printf("Location resolved: %.4f, %.4f\n", ll.Lat, ll.Lng)
 
-	results := fetchResults(ctx, ll, *radius, date, *players, *holes)
+	// In web mode fetch with players=1 to get all available tee times;
+	// --players only pre-populates the UI spots filter.
+	fetchPlayers := *players
+	if *web {
+		fetchPlayers = 1
+	}
+	results := fetchResults(ctx, ll, *radius, date, fetchPlayers, *holes)
 	final := deduplicate(filterByTime(results, fromMins, toMins))
 
 	if *web {
 		fetchFn := func(d time.Time) ([]display.CourseResult, error) {
-			r := fetchResults(ctx, ll, *radius, d, *players, *holes)
+			r := fetchResults(ctx, ll, *radius, d, 1, *holes)
 			return deduplicate(filterByTime(r, fromMins, toMins)), nil
 		}
-		if err := display.ServeWeb(final, *location, date, fetchFn); err != nil {
+		defaults := display.WebUIDefaults{From: *fromStr, To: *toStr, Players: *players}
+		if err := display.ServeWeb(final, *location, date, defaults, fetchFn); err != nil {
 			fmt.Fprintf(os.Stderr, "web server error: %v\n", err)
 			os.Exit(1)
 		}

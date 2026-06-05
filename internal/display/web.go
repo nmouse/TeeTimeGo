@@ -62,11 +62,19 @@ func buildCourseJSON(results []CourseResult) []courseJSON {
 	return courses
 }
 
+// WebUIDefaults carries CLI flag values to pre-populate the web UI filter bar.
+type WebUIDefaults struct {
+	From    string // HH:MM or "" — pre-fills the From time input
+	To      string // HH:MM or "" — pre-fills the To time input
+	Players int    // pre-selects the Min spots dropdown
+}
+
 // ServeWeb starts a local HTTP server and opens the browser to display results.
+// defaults pre-populates the filter bar with the CLI flag values that were used.
 // fetchFn is called when the user changes the date in the UI; it receives the new
 // date and should return deduplicated, filtered results for that date.
 // Blocks until the process is interrupted.
-func ServeWeb(results []CourseResult, location string, date time.Time, fetchFn func(time.Time) ([]CourseResult, error)) error {
+func ServeWeb(results []CourseResult, location string, date time.Time, defaults WebUIDefaults, fetchFn func(time.Time) ([]CourseResult, error)) error {
 	tmpl, err := template.New("").Parse(webTemplate)
 	if err != nil {
 		return fmt.Errorf("parsing template: %w", err)
@@ -77,6 +85,9 @@ func ServeWeb(results []CourseResult, location string, date time.Time, fetchFn f
 		Location string
 		Date     string
 		DateISO  string
+		From     string
+		To       string
+		Players  int
 	}
 
 	buildPage := func(r []CourseResult, d time.Time) (pageData, error) {
@@ -89,6 +100,9 @@ func ServeWeb(results []CourseResult, location string, date time.Time, fetchFn f
 			Location: location,
 			Date:     d.Format("January 2, 2006"),
 			DateISO:  d.Format("2006-01-02"),
+			From:     defaults.From,
+			To:       defaults.To,
+			Players:  defaults.Players,
 		}, nil
 	}
 
@@ -186,14 +200,14 @@ a.book:hover{background:#236b35}
 </header>
 <div class="bar">
   <label>Date <input type="date" id="f-date" value="{{.DateISO}}"></label>
-  <label>From <input type="time" id="f-from"></label>
-  <label>To <input type="time" id="f-to"></label>
+  <label>From <input type="time" id="f-from" value="{{.From}}"></label>
+  <label>To <input type="time" id="f-to" value="{{.To}}"></label>
   <label>Min spots
     <select id="f-spots">
-      <option value="1">Any</option>
-      <option value="2">2+</option>
-      <option value="3">3+</option>
-      <option value="4">4</option>
+      <option value="1"{{if eq .Players 1}} selected{{end}}>Any</option>
+      <option value="2"{{if eq .Players 2}} selected{{end}}>2+</option>
+      <option value="3"{{if eq .Players 3}} selected{{end}}>3+</option>
+      <option value="4"{{if eq .Players 4}} selected{{end}}>4</option>
     </select>
   </label>
   <label>Sort
