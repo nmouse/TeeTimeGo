@@ -166,7 +166,7 @@ func fetchResults(ctx context.Context, ll geo.LatLng, radius float64, date time.
 					ProviderFound: true,
 				}
 
-				cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				cctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 				defer cancel()
 
 				times, err := cgClient.GetTeeTimes(cctx, club.Slug, date, players, holes)
