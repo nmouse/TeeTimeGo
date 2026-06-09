@@ -60,19 +60,25 @@ func main() {
 	}
 	fmt.Printf("Location resolved: %.4f, %.4f\n", ll.Lat, ll.Lng)
 
+	loc, err := geo.TimezoneFor(ctx, ll)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "timezone lookup failed, using local time: %v\n", err)
+		loc = time.Local
+	}
+
 	// In web mode fetch with players=1 to get all available tee times;
 	// --players only pre-populates the UI spots filter.
 	fetchPlayers := *players
 	if *web {
 		fetchPlayers = 1
 	}
-	results := fetchResults(ctx, ll, *radius, date, fetchPlayers, *holes)
-	final := deduplicate(filterByTime(results, fromMins, toMins))
+	results := fetchResults(ctx, ll, *radius, date, fetchPlayers, *holes, loc)
+	final := deduplicate(filterByHoles(filterByTime(results, fromMins, toMins), *holes))
 
 	if *web {
 		fetchFn := func(d time.Time) ([]display.CourseResult, error) {
-			r := fetchResults(ctx, ll, *radius, d, 1, *holes)
-			return deduplicate(filterByTime(r, fromMins, toMins)), nil
+			r := fetchResults(ctx, ll, *radius, d, 1, *holes, loc)
+			return deduplicate(filterByHoles(filterByTime(r, fromMins, toMins), *holes)), nil
 		}
 		defaults := display.WebUIDefaults{From: *fromStr, To: *toStr, Players: *players}
 		if err := display.ServeWeb(final, *location, date, defaults, fetchFn); err != nil {
@@ -84,7 +90,7 @@ func main() {
 	}
 }
 
-func fetchResults(ctx context.Context, ll geo.LatLng, radius float64, date time.Time, players, holes int) []display.CourseResult {
+func fetchResults(ctx context.Context, ll geo.LatLng, radius float64, date time.Time, players, holes int, loc *time.Location) []display.CourseResult {
 	sem := make(chan struct{}, 10)
 	var mu sync.Mutex
 	var results []display.CourseResult
@@ -96,7 +102,7 @@ func fetchResults(ctx context.Context, ll geo.LatLng, radius float64, date time.
 	} else if len(courses) > 0 {
 		fmt.Printf("Found %d course(s) via OpenStreetMap. Checking for ForeUP booking...\n\n", len(courses))
 
-		foreupClient := foreup.New()
+		foreupClient := foreup.New(loc)
 		var wg sync.WaitGroup
 		for _, c := range courses {
 			wg.Add(1)
@@ -142,7 +148,7 @@ func fetchResults(ctx context.Context, ll geo.LatLng, radius float64, date time.
 	}
 
 	// Pipeline 2: Chronogolf
-	cgClient := chronogolf.New()
+	cgClient := chronogolf.New(loc)
 	radiusKm := radius * 1.609344
 	cgClubs, err := cgClient.SearchClubs(ctx, ll.Lat, ll.Lng, radiusKm)
 	if err != nil {
@@ -237,6 +243,24 @@ func parseTimeRange(from, to string) (fromMins, toMins int, err error) {
 		}
 	}
 	return
+}
+
+// filterByHoles removes tee times that don't match the requested hole count.
+// A holes value of 0 means no filter.
+func filterByHoles(results []display.CourseResult, holes int) []display.CourseResult {
+	if holes == 0 {
+		return results
+	}
+	for i := range results {
+		filtered := results[i].TeeTimes[:0]
+		for _, tt := range results[i].TeeTimes {
+			if tt.Holes == holes {
+				filtered = append(filtered, tt)
+			}
+		}
+		results[i].TeeTimes = filtered
+	}
+	return results
 }
 
 // filterByTime removes tee times outside [fromMins, toMins] (minutes-from-midnight).

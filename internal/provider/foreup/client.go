@@ -13,9 +13,11 @@ import (
 
 const bookingURL = "https://foreupsoftware.com/index.php/api/booking/times"
 
-type Client struct{}
+type Client struct {
+	loc *time.Location
+}
 
-func New() *Client { return &Client{} }
+func New(loc *time.Location) *Client { return &Client{loc: loc} }
 
 func (c *Client) Name() string { return "ForeUP" }
 
@@ -59,10 +61,10 @@ func (c *Client) GetTeeTimes(ctx context.Context, scheduleID string, date time.T
 
 	var times []provider.TeeTime
 	for _, s := range slots {
-		t, err := time.ParseInLocation("2006-01-02 15:04", s.Time, time.Local)
+		t, err := time.ParseInLocation("2006-01-02 15:04", s.Time, c.loc)
 		if err != nil {
 			// Try alternate format
-			t, err = time.ParseInLocation("2006-01-02T15:04:05", s.Time, time.Local)
+			t, err = time.ParseInLocation("2006-01-02T15:04:05", s.Time, c.loc)
 			if err != nil {
 				continue
 			}
@@ -72,6 +74,8 @@ func (c *Client) GetTeeTimes(ctx context.Context, scheduleID string, date time.T
 		if sid == "" || sid == "0" {
 			sid = scheduleID
 		}
+		// The booking URL format is correct; a 404 means the scraped schedule ID
+		// is stale — the course may have migrated to a new ForeUP schedule.
 		times = append(times, provider.TeeTime{
 			Time:    t,
 			Players: s.Players,

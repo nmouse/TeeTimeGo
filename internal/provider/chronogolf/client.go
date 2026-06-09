@@ -32,8 +32,8 @@ type Client struct {
 	loc     *time.Location // timezone for local-date comparisons; defaults to time.Local
 }
 
-// New returns a new Chronogolf client.
-func New() *Client { return &Client{apiBase: productionURL, loc: time.Local} }
+// New returns a new Chronogolf client using loc for timestamp conversion.
+func New(loc *time.Location) *Client { return &Client{apiBase: productionURL, loc: loc} }
 
 // Name implements provider.Provider.
 func (c *Client) Name() string { return "Chronogolf" }
@@ -165,9 +165,6 @@ func (c *Client) GetTeeTimes(ctx context.Context, slug string, date time.Time, p
 		params.Set("free_slots", fmt.Sprintf("%d", players))
 		params.Set("course_ids", strings.Join(courseUUIDs, ","))
 		params.Set("page", fmt.Sprintf("%d", page))
-		if holes == 9 || holes == 18 {
-			params.Set("holes", fmt.Sprintf("%d", holes))
-		}
 
 		resp, err := c.get(ctx, c.apiBase+"/marketplace/v2/teetimes?"+params.Encode())
 		if err != nil {
