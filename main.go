@@ -68,17 +68,20 @@ func main() {
 
 	// In web mode fetch with players=1 to get all available tee times;
 	// --players only pre-populates the UI spots filter.
+	// In web mode fetch with holes=0 so the browser dropdown can filter client-side.
 	fetchPlayers := *players
+	fetchHoles := *holes
 	if *web {
 		fetchPlayers = 1
+		fetchHoles = 0
 	}
-	results := fetchResults(ctx, ll, *radius, date, fetchPlayers, *holes, loc)
-	final := deduplicate(filterByHoles(filterByTime(results, fromMins, toMins), *holes))
+	results := fetchResults(ctx, ll, *radius, date, fetchPlayers, fetchHoles, loc)
+	final := deduplicate(filterByHoles(filterByTime(results, fromMins, toMins), fetchHoles))
 
 	if *web {
 		fetchFn := func(d time.Time) ([]display.CourseResult, error) {
-			r := fetchResults(ctx, ll, *radius, d, 1, *holes, loc)
-			return deduplicate(filterByHoles(filterByTime(r, fromMins, toMins), *holes)), nil
+			r := fetchResults(ctx, ll, *radius, d, 1, 0, loc)
+			return deduplicate(filterByTime(r, fromMins, toMins)), nil
 		}
 		defaults := display.WebUIDefaults{From: *fromStr, To: *toStr, Players: *players, Holes: *holes}
 		if err := display.ServeWeb(final, *location, date, defaults, fetchFn); err != nil {

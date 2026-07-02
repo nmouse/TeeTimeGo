@@ -25,7 +25,9 @@ func (c *Client) GetTeeTimes(ctx context.Context, scheduleID string, date time.T
 	params := url.Values{}
 	params.Set("time", "all")
 	params.Set("date", date.Format("01-02-2006"))
-	params.Set("holes", fmt.Sprintf("%d", holes))
+	if holes != 0 {
+		params.Set("holes", fmt.Sprintf("%d", holes))
+	}
 	params.Set("players", fmt.Sprintf("%d", players))
 	params.Set("schedule_id", scheduleID)
 	params.Set("schedule_ids[]", scheduleID)
