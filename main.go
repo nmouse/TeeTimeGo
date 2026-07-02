@@ -80,7 +80,7 @@ func main() {
 			r := fetchResults(ctx, ll, *radius, d, 1, *holes, loc)
 			return deduplicate(filterByHoles(filterByTime(r, fromMins, toMins), *holes)), nil
 		}
-		defaults := display.WebUIDefaults{From: *fromStr, To: *toStr, Players: *players}
+		defaults := display.WebUIDefaults{From: *fromStr, To: *toStr, Players: *players, Holes: *holes}
 		if err := display.ServeWeb(final, *location, date, defaults, fetchFn); err != nil {
 			fmt.Fprintf(os.Stderr, "web server error: %v\n", err)
 			os.Exit(1)

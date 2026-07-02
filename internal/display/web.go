@@ -67,6 +67,7 @@ type WebUIDefaults struct {
 	From    string // HH:MM or "" — pre-fills the From time input
 	To      string // HH:MM or "" — pre-fills the To time input
 	Players int    // pre-selects the Min spots dropdown
+	Holes   int    // pre-selects the Holes dropdown (9, 18, or 0 for any)
 }
 
 // ServeWeb starts a local HTTP server and opens the browser to display results.
@@ -88,6 +89,7 @@ func ServeWeb(results []CourseResult, location string, date time.Time, defaults 
 		From     string
 		To       string
 		Players  int
+		Holes    int
 	}
 
 	buildPage := func(r []CourseResult, d time.Time) (pageData, error) {
@@ -103,6 +105,7 @@ func ServeWeb(results []CourseResult, location string, date time.Time, defaults 
 			From:     defaults.From,
 			To:       defaults.To,
 			Players:  defaults.Players,
+			Holes:    defaults.Holes,
 		}, nil
 	}
 
@@ -216,6 +219,13 @@ a.book:hover{background:#236b35}
       <option value="4"{{if eq .Players 4}} selected{{end}}>4</option>
     </select>
   </label>
+  <label>Holes
+    <select id="f-holes">
+      <option value=""{{if not .Holes}} selected{{end}}>Any</option>
+      <option value="9"{{if eq .Holes 9}} selected{{end}}>9</option>
+      <option value="18"{{if eq .Holes 18}} selected{{end}}>18</option>
+    </select>
+  </label>
   <label>Sort
     <select id="f-sort">
       <option value="dist">Distance</option>
@@ -233,7 +243,7 @@ a.book:hover{background:#236b35}
         <th data-col="name">Course</th>
         <th data-col="dist">Dist</th>
         <th data-col="time">Time</th>
-        <th data-col="spots">Spots</th>
+        <th data-col="spots">Avail.</th>
         <th data-col="holes">Holes</th>
         <th data-col="price">Price</th>
         <th></th>
@@ -256,18 +266,20 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 function fmt(p){ return p>0?'$'+p.toFixed(2):'--'; }
 
 function render(){
-  const fromM = toMins(document.getElementById('f-from').value);
-  const toM   = toMins(document.getElementById('f-to').value);
-  const spots = parseInt(document.getElementById('f-spots').value)||1;
-  const sortBy= document.getElementById('f-sort').value;
-  const hide  = document.getElementById('f-hide').checked;
+  const fromM  = toMins(document.getElementById('f-from').value);
+  const toM    = toMins(document.getElementById('f-to').value);
+  const spots  = parseInt(document.getElementById('f-spots').value)||1;
+  const holes  = document.getElementById('f-holes').value;
+  const sortBy = document.getElementById('f-sort').value;
+  const hide   = document.getElementById('f-hide').checked;
 
   const courses = raw.map(c=>({
     ...c,
     vis: (c.teeTimes||[]).filter(t=>
       (fromM<0||t.minutes>=fromM)&&
       (toM<0||t.minutes<=toM)&&
-      t.players>=spots
+      t.players>=spots&&
+      (!holes||t.holes===parseInt(holes))
     )
   }));
 
@@ -298,7 +310,7 @@ function render(){
       const cnt   = c.vis.length+' time'+(c.vis.length!==1?'s':'');
 
       rows.push(
-        '<tr class="course-row has-times" onclick="toggleCourse('+JSON.stringify(c.name)+')">' +
+        '<tr class="course-row has-times" data-name="'+esc(c.name)+'" onclick="toggleCourse(this.dataset.name)">' +
         '<td><span class="arrow">'+arrow+'</span> '+esc(c.name)+'</td>'+
         '<td class="dist">'+c.distMiles.toFixed(1)+'mi</td>'+
         '<td class="range">'+esc(range)+'</td>'+
@@ -360,7 +372,7 @@ document.getElementById('f-date').addEventListener('change', async function() {
   }
 });
 
-['f-from','f-to','f-spots','f-sort','f-hide'].forEach(id=>
+['f-from','f-to','f-spots','f-holes','f-sort','f-hide'].forEach(id=>
   document.getElementById(id).addEventListener('change',render));
 document.getElementById('f-from').addEventListener('input',render);
 document.getElementById('f-to').addEventListener('input',render);
